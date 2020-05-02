@@ -4,6 +4,7 @@ module Type.Trout.Client
        , class HasMethodClients
        , getMethodClients
        , asClients
+       , BaseURI(..)
        ) where
 
 import Prelude
@@ -15,12 +16,15 @@ import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat (json, string) as AXResponseFormat
 import Control.Monad.Except.Trans (throwError)
 import Data.Argonaut (class DecodeJson, class EncodeJson, decodeJson, encodeJson)
-import Data.Array ((:), singleton)
+import Data.Array (foldMap, singleton, (:))
 import Data.Bifunctor (rmap)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
+import Data.Generic.Rep (class Generic)
+import Data.Generic.Rep.Show (genericShow)
 import Data.HTTP.Method as Method
 import Data.Maybe (Maybe(..))
+import Data.Newtype (class Newtype)
 import Data.String (joinWith)
 import Data.Symbol (class IsSymbol, SProxy(..), reflectSymbol)
 import Data.Tuple (Tuple(..))
@@ -28,35 +32,42 @@ import Effect.Aff (Aff)
 import Effect.Exception (error)
 import Prim.Row (class Cons)
 import Type.Proxy (Proxy(..))
-import Type.Trout
-  ( type (:<|>)
-  , type (:=)
-  ,type (:>)
-  , Capture
-  , CaptureAll
-  , Header
-  , Lit
-  , Method
-  , QueryParam
-  , QueryParams
-  , ReqBody
-  , Resource
-  )
+import Type.Trout (type (:<|>), type (:=), type (:>), Capture, CaptureAll, Header, Lit, Method, QueryParam, QueryParams, ReqBody, Resource)
 import Type.Trout.ContentType.HTML (HTML)
 import Type.Trout.ContentType.JSON (JSON)
 import Type.Trout.Header (class ToHeader, toHeader)
 import Type.Trout.PathPiece (class ToPathPiece, toPathPiece)
 import Type.Trout.Record as Record
+import URI (Authority, Host, UserInfo)
+import URI.Scheme (Scheme, print)
+import URI.Authority (print) as A
+import URI.Host (print) as H
+
+newtype BaseURI = BaseURI { scheme :: Scheme , authority :: Authority UserInfo Host }
+
+derive instance eqBaseURI :: Eq BaseURI
+derive instance newtypeBaseURI :: Newtype BaseURI _
+derive instance genericBaseURI :: Generic BaseURI _
+derive instance ordBaseURI :: Ord BaseURI
+instance showScheme :: Show BaseURI where
+  show = genericShow
+
+instance hasClientsBaseURI :: ( HasClients sub subMk
+                              )
+                              => HasClients (BaseURI :> sub) (BaseURI -> subMk) where
+  getClients _ req baseURI =
+    getClients (Proxy :: Proxy sub) req { baseURI = Just baseURI }
 
 type RequestBuilder =
   { path :: Array String
+  , baseURI :: Maybe BaseURI
   , params :: Array (Tuple String String)
   , headers :: Array RequestHeader
   , content :: Maybe RequestBody
   }
 
 emptyRequestBuilder :: RequestBuilder
-emptyRequestBuilder = { path: [], params: [], headers: [], content: Nothing }
+emptyRequestBuilder = { baseURI: Nothing, path: [], params: [], headers: [], content: Nothing }
 
 appendSegment :: String -> RequestBuilder -> RequestBuilder
 appendSegment segment req =
@@ -80,11 +91,14 @@ appendContent content req = req
 
 toAffjaxRequest :: RequestBuilder -> Request Unit
 toAffjaxRequest req = defaultRequest
-  { url = "/" <> joinWith "/" req.path <> params
+  { url = foldMap baseURI req.baseURI <> "/" <> joinWith "/" req.path <> params
   , headers = req.headers
   , content = req.content
   }
   where
+  baseURI (BaseURI {authority, scheme}) =
+    print scheme <> A.print printOptions authority
+  printOptions = { printUserInfo: identity, printHosts: H.print }
   params = case req.params of
     [] -> ""
     segments -> "?" <> joinWith "&" (map (\(Tuple q x) -> q <> "=" <> x) segments)
@@ -217,7 +231,7 @@ instance hasMethodClientMethodJson
 
 instance hasMethodClientsHTMLString
   :: IsSymbol method
-  => HasMethodClients method String HTML (Aff String) where
+  => HasMethodClients method String (HTML a) (Aff String) where
   getMethodClients method _ req = do
     r <- toAffjaxRequest req
            # _ { method = toMethod method, responseFormat = AXResponseFormat.string }
