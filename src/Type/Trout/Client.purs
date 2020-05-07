@@ -159,7 +159,13 @@ instance hasClientsQueryParams :: (HasClients sub subMk, IsSymbol c, ToPathPiece
     where
     q = reflectSymbol (SProxy :: SProxy c)
 
-instance hasClientsHeader :: (HasClients sub subMk, IsSymbol n, ToHeader t)
+instance hasClientsMaybeHeader :: (HasClients sub subMk, IsSymbol n, ToHeader t)
+                            => HasClients (Header n (Maybe t) :> sub) (t -> subMk) where
+  getClients _ req x =
+    getClients (Proxy :: Proxy sub) $ appendHeader h (toHeader x) req
+    where
+    h = reflectSymbol (SProxy :: SProxy n)
+else instance hasClientsHeader :: (HasClients sub subMk, IsSymbol n, ToHeader t)
                              => HasClients (Header n t :> sub) (t -> subMk) where
   getClients _ req x =
     getClients (Proxy :: Proxy sub) $ appendHeader h (toHeader x) req
